@@ -5,6 +5,9 @@ const asyncHandler = require("express-async-handler");
 const { generateRefreshToken } = require("../config/refreshToken");
 const sendEmail = require("./emailCtrl");
 const jwt = require("jsonwebtoken");
+const excelJS = require("exceljs");
+const fs = require("fs");
+const cron = require("node-cron");
 const Product = require("../models/productModel");
 const Cart = require("../models/cartModel");
 var uniqid = require("uniqid");
@@ -12,6 +15,215 @@ const Coupon = require("../models/couponModel");
 const crypto = require("crypto");
 const Order = require("../models/orderModel");
 const HistoryCart = require("../models/HistoryCartModel");
+const updateProcessingOrders = async () => {
+  try {
+    // Tìm tất cả các đơn hàng đang trong trạng thái "Đang chế biến"
+    const processingOrders = await Order.find({ orderStatus: "Đang chế biến" });
+
+    // Duyệt qua từng đơn hàng và cập nhật trạng thái
+    for (const order of processingOrders) {
+      order.orderStatus = "Đã nhận hàng";
+      await order.save();
+    }
+
+    console.log("Đã cập nhật trạng thái các đơn hàng thành công.");
+  } catch (error) {
+    console.error("Lỗi khi cập nhật trạng thái đơn hàng:", error);
+  }
+};
+
+cron.schedule(
+  "0 0 * * *",
+  () => {
+    updateProcessingOrders();
+  },
+  {
+    scheduled: true,
+    timezone: "Asia/Ho_Chi_Minh",
+  }
+);
+const getRevenueLast7Days = asyncHandler(async (req, res) => {
+  try {
+    // Lấy ngày hiện tại
+    const currentDate = new Date();
+
+    // Ngày 7 ngày trước
+    const sevenDaysAgo = new Date(currentDate);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    // Tìm các bản ghi được tạo trong khoảng thời gian từ 7 ngày trước đến hiện tại
+    const orders = await Order.find({
+      createdAt: { $gte: sevenDaysAgo, $lte: currentDate },
+    }).populate("products.product");
+
+    // Tạo một đối tượng để lưu trữ tổng doanh thu của từng ngày
+    const revenueByDay = {};
+
+    // Tính tổng doanh thu trong mỗi ngày
+    orders.forEach((order) => {
+      const orderDate = order.createdAt.toISOString().split("T")[0]; // Lấy ngày từ timestamp
+
+      let dailyRevenue = 0;
+      order.products.forEach((item) => {
+        dailyRevenue += item.product.price * item.count; // Giả sử có trường giá trong product
+      });
+
+      // Thêm doanh thu vào ngày tương ứng
+      if (!revenueByDay[orderDate]) {
+        revenueByDay[orderDate] = dailyRevenue;
+      } else {
+        revenueByDay[orderDate] += dailyRevenue;
+      }
+    });
+
+    return res.status(200).json({ revenueByDay });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+const exportOrder = asyncHandler(async (req, res) => {
+  try {
+    const { orderId } = req.params; // Đây là _id của order cần xuất file Excel
+    const order = await Order.findById(orderId)
+      .populate({
+        path: "products.product",
+        model: "Product",
+      })
+      .lean();
+    if (!order) {
+      return res.status(404).send({ message: "Order not found" });
+    }
+
+    const workbook = new excelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Order Data");
+
+    worksheet.columns = [
+      { header: "Tên đồ ăn", key: "name", width: 20 },
+      { header: "Tiêu đề", key: "description", width: 40 },
+      { header: "Giá", key: "price", width: 15 },
+      { header: "Số lượng", key: "quantity", width: 15 },
+    ];
+
+    order.products.forEach((orderedProduct) => {
+      const productData = orderedProduct.product;
+
+      const formattedData = {
+        name: productData.name,
+        description: productData.description,
+        price: `${productData.price.toFixed(1)}00 VNĐ`,
+        quantity: orderedProduct.count,
+        // Add other fields accordingly
+      };
+
+      worksheet.addRow(formattedData);
+    });
+    const totalAmount = order.paymentIntent.amount;
+    worksheet.addRow({
+      price: "Tổng số tiền",
+      quantity: "",
+      description: "",
+      name: "",
+      quantity: `${totalAmount.toFixed(1)}00 VNĐ`,
+    });
+    const filePath = `./files/order_${orderId}.xlsx`;
+    await workbook.xlsx.writeFile(filePath);
+
+    res.send({
+      status: true,
+      message: "File successfully exported",
+      path: filePath,
+    });
+  } catch (error) {
+    res.status(400).send({ message: error.message });
+  }
+});
+
+const cancelOrder = asyncHandler(async (req, res) => {
+  const { orderId } = req.params;
+  try {
+    const order = await Order.findById(orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: "Không tìm thấy đơn đặt hàng" });
+    }
+
+    if (order.orderStatus !== "Chờ xác nhận") {
+      return res
+        .status(400)
+        .json({ message: "Đơn hàng không ở trạng thái cần hủy xác nhận" });
+    }
+
+    order.orderStatus = "Hủy xác nhận";
+    await order.save();
+
+    res.status(200).json({ message: "Đã hủy xác nhận đơn hàng" });
+  } catch (error) {
+    res.status(500).json({
+      message: "Đã xảy ra lỗi khi hủy xác nhận đơn hàng",
+      error: error.message,
+    });
+  }
+});
+const confirmOrder = asyncHandler(async (req, res) => {
+  const { orderId } = req.params;
+
+  try {
+    const order = await Order.findById(orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: "Không tìm thấy đơn đặt hàng" });
+    }
+    order.orderStatus = "Đang chế biến";
+    await order.save();
+    res.status(200).json({ message: "Đơn đặt hàng đã được xác nhận" });
+  } catch (error) {
+    res.status(500).json({
+      message: "Đã xảy ra lỗi khi xác nhận đơn đặt hàng",
+      error: error.message,
+    });
+  }
+});
+const updateOrderStatus = async (orderId) => {
+  try {
+    const order = await Order.findById(orderId);
+    if (!order) {
+      console.log("Đơn đặt hàng không tồn tại");
+      return;
+    }
+    if (order.orderStatus !== "Đã nhận hàng") {
+      console.log("Đơn đặt hàng không ở trạng thái đã nhận");
+      return;
+    }
+    order.orderStatus = "Chuyển trạng thái tự động";
+    await order.save();
+    console.log("Đơn đặt hàng đã được tự động chuyển trạng thái");
+  } catch (error) {
+    console.error("Lỗi khi cập nhật đơn đặt hàng", error);
+  }
+};
+
+const receiveOrder = asyncHandler(async (req, res) => {
+  const { orderId } = req.params;
+  try {
+    const order = await Order.findById(orderId);
+
+    if (!order) {
+      return res.status(404).json({ message: "Không tìm thấy đơn đặt hàng" });
+    }
+    order.orderStatus = "Đã nhận hàng";
+    await order.save();
+    res.status(200).json({ message: "Đơn đặt hàng đã được nhận" });
+    const oneDay = 24 * 60 * 60 * 1000;
+    setTimeout(() => {
+      updateOrderStatus(orderId);
+    }, oneDay);
+  } catch (error) {
+    res.status(500).json({
+      message: "Đã xảy ra lỗi khi xác nhận đơn đặt hàng",
+      error: error.message,
+    });
+  }
+});
 const createUser = asyncHandler(async (req, res) => {
   const email = req.body.email;
   const findUser = await User.findOne({ email: email });
@@ -22,6 +234,31 @@ const createUser = asyncHandler(async (req, res) => {
     throw new Error("User already exists");
   }
 });
+const resetPasswords = async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    // Find user by email
+    const user = await User.findOne({ email });
+
+    // Check if user exists
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Set new password directly
+    user.password = password;
+    user.passwordChangedAt = Date.now();
+
+    // Save the updated user
+    await user.save();
+
+    res.status(200).json({ message: "Password reset successful" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to reset password" });
+  }
+};
 
 const loginUserCtrl = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
@@ -56,30 +293,40 @@ const loginUserCtrl = asyncHandler(async (req, res) => {
 const loginAdminCtrl = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   const findAdmin = await User.findOne({ email });
-  if (findAdmin.role != "admin") throw new Error("Not Authorised");
+
+  if (!findAdmin) {
+    throw new Error("Invalid Credentials");
+  }
+
   if (findAdmin && (await findAdmin.isPasswordMatched(password))) {
-    const token = await generateRefreshToken(findAdmin?.id);
-    const updateAdmin = await User.findByIdAndUpdate(
-      findAdmin.id,
-      {
-        token: token,
-      },
-      {
-        new: true,
-      }
-    );
-    res.cookie("token", token, {
-      httpOnly: true,
-      maxAge: 72 * 60 * 60 * 1000,
-    });
-    res.json({
-      _id: findAdmin?._id,
-      status: true,
-      fullname: findAdmin?.fullname,
-      email: findAdmin?.email,
-      phone: findAdmin?.phone,
-      token: generateToken(findAdmin?._id),
-    });
+    if (findAdmin.role === "admin" || findAdmin.role === "employee") {
+      const token = await generateRefreshToken(findAdmin?.id);
+      const updateAdmin = await User.findByIdAndUpdate(
+        findAdmin.id,
+        {
+          token: token,
+        },
+        {
+          new: true,
+        }
+      );
+
+      res.cookie("token", token, {
+        httpOnly: true,
+        maxAge: 72 * 60 * 60 * 1000,
+      });
+
+      res.json({
+        _id: findAdmin?._id,
+        status: true,
+        fullname: findAdmin?.fullname,
+        email: findAdmin?.email,
+        phone: findAdmin?.phone,
+        token: generateToken(findAdmin?._id),
+      });
+    } else {
+      throw new Error("Not Authorised");
+    }
   } else {
     throw new Error("Invalid Credentials");
   }
@@ -125,12 +372,12 @@ const getaUser = asyncHandler(async (req, res) => {
   }
 });
 const deleteUser = asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  validateMongodbId(id);
+  const { _id } = req.params;
+  validateMongodbId(_id);
 
   try {
-    const deleteUser = await User.findByIdAndDelete(id);
-    res.json({ deleteUser });
+    const deleteUser = await User.findByIdAndDelete(_id);
+    res.json(deleteUser);
   } catch (error) {
     throw new Error(error);
   }
@@ -465,16 +712,16 @@ const saveHistoryCart = asyncHandler(async (req, res) => {
     const { _id } = req.user;
     const user = await User.findOne({ _id });
 
-    const currentCart = await Cart.findOne({ orderBy: user._id }).populate(
-      "products.product"
+    const currentCart = await Order.findOne({ orderBy: user._id }).populate(
+      "products"
     );
 
     if (!currentCart) {
-      return res.status(404).json({ message: "Giỏ hàng không tồn tại" });
+      return res.status(404).json({ message: "Đơn hàng không tồn tại" });
     }
     const historyCart = new HistoryCart({
       userId: _id,
-      cart: currentCart.products,
+      cart: currentCart,
     });
 
     await historyCart.save();
@@ -490,34 +737,7 @@ const saveHistoryCart = asyncHandler(async (req, res) => {
     res.status(500).json({ message: "Lỗi server" });
   }
 });
-const getHistory = asyncHandler(async (req, res) => {
-  try {
-    const { _id } = req.user; // Thay thế bằng cách lấy thông tin người dùng từ request
-    const historyCarts = await HistoryCart.find({ userId: _id }).populate({
-      path: "cart",
-      populate: {
-        path: "product",
-        model: "Product",
-        select: "name images", // Include the fields you want
-      },
-    });
 
-    res.status(200).json({ data: historyCarts, status: true });
-  } catch (error) {
-    console.error("Lỗi khi lấy lịch sử giỏ hàng:", error);
-    res.status(500).json({ message: "Lỗi server" });
-  }
-});
-const getAllHistory = asyncHandler(async (req, res) => {
-  try {
-    const getallhistory = await HistoryCart.find()
-      .populate("userId")
-      .populate("cart");
-    res.json({ data: getallhistory, status: true });
-  } catch (error) {
-    throw new Error(error);
-  }
-});
 const applyCoupon = asyncHandler(async (req, res) => {
   const { name } = req.body;
   const { _id } = req.user;
@@ -532,10 +752,7 @@ const applyCoupon = asyncHandler(async (req, res) => {
   let { cartTotal } = await Cart.findOne({
     orderBy: user._id,
   }).populate("products.product");
-  let totalAfterDiscount = (
-    cartTotal -
-    (cartTotal * validCoupon.discount) / 100
-  ).toFixed(2);
+  let totalAfterDiscount = validCoupon.discount;
   await Cart.findOneAndUpdate(
     { orderBy: user._id },
     { totalAfterDiscount },
@@ -553,23 +770,24 @@ const createOrder = asyncHandler(async (req, res) => {
     let userCart = await Cart.findOne({ orderBy: user._id });
     let finalAmout = 0;
     if (couponApplied && userCart.totalAfterDiscount) {
-      finalAmout = userCart.totalAfterDiscount;
+      finalAmout =
+        userCart.cartTotal -
+        (userCart.totalAfterDiscount * userCart.cartTotal) / 100;
     } else {
       finalAmout = userCart.cartTotal;
     }
-
     const newOrder = await new Order({
       products: userCart.products,
       paymentIntent: {
         id: uniqid(),
         method: "COD",
         amount: finalAmout,
-        status: "Cash On Delivery",
+        status: "Chờ xác nhận",
         created: Date.now(),
         currency: "VNĐ",
       },
       orderBy: user._id,
-      orderStatus: "Cash on Delivery",
+      orderStatus: "Chờ xác nhận",
     }).save();
     let update = userCart.products.map((item) => {
       return {
@@ -580,7 +798,7 @@ const createOrder = asyncHandler(async (req, res) => {
       };
     });
     const updated = await Product.bulkWrite(update, {});
-    res.json({ data: newOrder });
+    res.json(newOrder);
   } catch (error) {
     throw new Error(error);
   }
@@ -591,52 +809,93 @@ const getOrder = asyncHandler(async (req, res) => {
   try {
     const userorder = await Order.findOne({ orderBy: _id })
       .populate("products")
-      .populate("orderBy")
+      .populate("orderBy", "fullname email role address")
+      .sort({ createdAt: -1 })
       .exec();
     res.json(userorder);
   } catch (error) {
     throw new Error(error);
   }
 });
+const getConfirmOrder = asyncHandler(async (req, res) => {
+  const { _id } = req.user;
+  validateMongodbId(_id);
+  try {
+    const userorder = await Order.find({
+      orderBy: _id,
+      orderStatus: { $in: ["Đang chế biến", "Chờ xác nhận"] },
+    })
+      .populate("products")
+      .populate("orderBy", "fullname email role address");
+    res.json({ data: userorder, status: true });
+  } catch (error) {
+    throw new Error(error);
+  }
+});
+
+const getOrderWait = asyncHandler(async (req, res) => {
+  try {
+    const userorder = await Order.find({ orderStatus: "Chờ xác nhận" })
+      .populate("products")
+      .populate("orderBy", "fullname email role address");
+    res.json(userorder);
+  } catch (error) {
+    throw new Error(error);
+  }
+});
+const getIdOrder = asyncHandler(async (req, res, next) => {
+  const { _id } = req.params;
+  try {
+    const userorder = await Order.findById({ _id: _id })
+      .populate("products.product")
+      .sort({ createdAt: -1 });
+
+    if (!userorder) {
+      res.status(404);
+      throw new Error("Order not found");
+    }
+
+    res.json(userorder);
+  } catch (error) {
+    next(error);
+  }
+});
+
 const getAllOrder = asyncHandler(async (req, res) => {
   try {
-    const getAll = await Order.find().populate("orderBy", "fullname phone");
+    const getAll = await Order.find()
+      .populate("orderBy", "fullname phone address")
+      .sort({ createdAt: -1 });
     res.json(getAll);
   } catch (error) {
     throw new Error(error);
   }
 });
-const updateOrderStatus = asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const { status } = req.body;
-  validateMongodbId(id);
+const getHistory = asyncHandler(async (req, res) => {
+  const { _id } = req.user;
   try {
-    const findOrder = await Order.findByIdAndUpdate(
-      id,
-      {
-        orderStatus: status,
-        paymentIntent: {
-          status: status,
-        },
-      },
-      {
-        new: true,
-      }
-    );
-    res.json(findOrder);
+    const orders = await Order.find({ orderBy: _id })
+      .populate("products.product", "name images category")
+      .populate("orderBy", "fullname")
+      .sort({ createdAt: -1 });
+    res.json({ data: orders, status: true });
   } catch (error) {
-    throw new Error(error);
+    res.status(500).json({ message: "Internal Server Error" });
   }
 });
+
 const getOrderByUser = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
   try {
     // Fetch orders for the user
-    const userOrders = await Order.find({ orderBy: id })
+    const userOrders = await Order.find({
+      orderBy: id,
+    })
       .populate("products")
       .populate("orderBy", "fullname")
-      .populate("paymentIntent");
+      .populate("paymentIntent")
+      .sort({ createdAt: -1 });
 
     if (userOrders.length === 0) {
       return res.status(404).json({ message: "No orders found for the user." });
@@ -668,10 +927,10 @@ const getOrderByUser = asyncHandler(async (req, res) => {
   }
 });
 const deleteOrderByUser = asyncHandler(async (req, res) => {
-  const { id } = req.params;
+  const { _id } = req.params;
 
   try {
-    const order = await Order.find({ orderBy: id });
+    const order = await Order.find({ orderBy: _id });
     if (!order) {
       return res.status(404).json({ message: "Order not found." });
     }
@@ -687,8 +946,8 @@ module.exports = {
   loginUserCtrl,
   getOrder,
   emptyCart,
-  updateOrderStatus,
   addToCart,
+  confirmOrder,
   logout,
   deleteOrderByUser,
   applyCoupon,
@@ -702,17 +961,24 @@ module.exports = {
   getaUser,
   deleteUser,
   updatePassword,
+  resetPasswords,
   updatedUser,
+  getRevenueLast7Days,
+  exportOrder,
   checkUserExist,
   blockUser,
-  getAllHistory,
   unblockUser,
+  cancelOrder,
   handleRefreshToken,
   loginAdminCtrl,
+  receiveOrder,
   userCart,
-  getHistory,
   saveHistoryCart,
   removeCart,
   getAllOrder,
+  getOrderWait,
   getOrderByUser,
+  getHistory,
+  getIdOrder,
+  getConfirmOrder,
 };

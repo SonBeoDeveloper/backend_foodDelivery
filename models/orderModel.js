@@ -14,14 +14,13 @@ const orderSchema = new mongoose.Schema(
     paymentIntent: {},
     orderStatus: {
       type: String,
-      default: "Not Processed",
+      default: "Chờ xác nhận",
       enum: [
-        "Not Processed",
-        "Cash on Delivery",
-        "Processing",
-        "Dispatched",
-        "Cancelled",
-        "Delivered",
+        "Chờ xác nhận",
+        "Đang chế biến",
+        "Đang giao hàng",
+        "Hủy xác nhận",
+        "Đã nhận hàng",
       ],
     },
     orderBy: {

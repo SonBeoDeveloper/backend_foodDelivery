@@ -2,14 +2,45 @@ const express = require("express");
 const router = express.Router();
 const userCtrl = require("../controllers/userCtrl");
 const authMiddleware = require("../middlewares/authMiddleware");
+router.get(
+  "/getRevenueLast7Days",
+  authMiddleware.authMiddleware,
+  userCtrl.getRevenueLast7Days,
+  authMiddleware.isAdmin
+);
+router.get(
+  "/confirmOrder",
+  authMiddleware.authMiddleware,
+  userCtrl.getConfirmOrder
+);
+
+router.get(
+  "/get-order-history",
+  authMiddleware.authMiddleware,
+  userCtrl.getHistory
+);
+router.get(
+  "/exportOrder/:orderId",
+  authMiddleware.authMiddleware,
+  userCtrl.exportOrder,
+  authMiddleware.isAdmin
+);
+router.patch("/cancelOrder/:orderId", userCtrl.cancelOrder);
+router.patch("/receiveOrder/:orderId", userCtrl.receiveOrder);
+router.patch("/orders/:orderId", userCtrl.confirmOrder);
 router.post("/login", userCtrl.loginUserCtrl);
 router.get("/cart", authMiddleware.authMiddleware, userCtrl.getUserCart);
-router.get("/history", authMiddleware.authMiddleware, userCtrl.getHistory);
 router.get(
   "/getallorder",
   authMiddleware.authMiddleware,
   authMiddleware.isAdmin,
   userCtrl.getAllOrder
+);
+router.get(
+  "/getorderwait",
+  authMiddleware.authMiddleware,
+  authMiddleware.isAdmin,
+  userCtrl.getOrderWait
 );
 router.delete(
   "/deleteOrder/:id",
@@ -23,6 +54,12 @@ router.post(
   "/saveHistoryCart",
   authMiddleware.authMiddleware,
   userCtrl.saveHistoryCart
+);
+router.get(
+  "/idOrder/:_id",
+  authMiddleware.authMiddleware,
+  authMiddleware.isAdmin,
+  userCtrl.getIdOrder
 );
 router.post(
   "/removeFromCart",
@@ -40,12 +77,7 @@ router.post("/login-admin", userCtrl.loginAdminCtrl);
 router.get("/wishlist", authMiddleware.authMiddleware, userCtrl.getWishlist);
 router.get("/", userCtrl.getAllUser);
 router.get("/get-order", authMiddleware.authMiddleware, userCtrl.getOrder);
-router.put(
-  "/update-order/:_id",
-  authMiddleware.authMiddleware,
-  authMiddleware.isAdmin,
-  userCtrl.updateOrderStatus
-);
+
 router.get("/logout", userCtrl.logout);
 router.get("/refresh", userCtrl.handleRefreshToken);
 router.post("/forgot-password-token", userCtrl.forgotPasswordToken);
@@ -65,20 +97,21 @@ router.put(
 );
 router.delete("/empty-cart", authMiddleware.authMiddleware, userCtrl.emptyCart);
 router.put("/reset-password", userCtrl.resetPassword);
+router.put("/reset-passwords", userCtrl.resetPasswords);
 router.post(
   "/cart/cash-order",
   authMiddleware.authMiddleware,
   userCtrl.createOrder
 );
 router.get("/get-user", authMiddleware.authMiddleware, userCtrl.getaUser);
-router.get(
-  "/allhistory",
-  authMiddleware.authMiddleware,
-  authMiddleware.isAdmin,
-  userCtrl.getAllHistory
-);
+
 router.put("/password", authMiddleware.authMiddleware, userCtrl.updatePassword);
-router.delete("/:_id", userCtrl.deleteUser);
+router.delete(
+  "/:_id",
+  userCtrl.deleteUser,
+  authMiddleware.authMiddleware,
+  authMiddleware.isAdmin
+);
 router.put("/edit", authMiddleware.authMiddleware, userCtrl.updatedUser);
 router.put(
   "/block-user/:_id",

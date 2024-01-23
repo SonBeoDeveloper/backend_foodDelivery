@@ -4,7 +4,18 @@ const productCtrl = require("../controllers/productCtrl");
 const router = express.Router();
 const auth = require("../middlewares/authMiddleware");
 const { uploadPhoto, productImgResize } = require("../middlewares/uploadImges");
-
+router.get(
+  "/top-products",
+  auth.authMiddleware,
+  auth.isAdmin,
+  productCtrl.getTopProducts
+);
+router.get(
+  "/export",
+  productCtrl.exportProduct,
+  auth.authMiddleware,
+  auth.isAdmin
+);
 router.post(
   "/create",
   auth.authMiddleware,
@@ -35,4 +46,5 @@ router.delete(
   auth.isAdmin,
   productCtrl.deleteProduct
 );
+router.get("/productsByCategory/:id", productCtrl.getProductByIdCategory);
 module.exports = router;

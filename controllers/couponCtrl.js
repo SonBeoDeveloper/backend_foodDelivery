@@ -1,7 +1,7 @@
 const asyncHandler = require("express-async-handler");
 const validateMongoDbId = require("../utils/validateMongodbId");
 const Coupon = require("../models/couponModel");
-
+const cron = require("node-cron");
 const createCoupon = asyncHandler(async (req, res) => {
   try {
     const newCoupon = await Coupon.create(req.body);
@@ -14,6 +14,16 @@ const createCoupon = asyncHandler(async (req, res) => {
 const getAllCoupon = asyncHandler(async (req, res) => {
   try {
     const getAll = await Coupon.find();
+    res.json(getAll);
+  } catch (error) {
+    throw new Error(error);
+  }
+});
+const getACoupon = asyncHandler(async (req, res) => {
+  const { _id } = req.params;
+  validateMongoDbId(_id);
+  try {
+    const getAll = await Coupon.findById(_id);
     res.json(getAll);
   } catch (error) {
     throw new Error(error);
@@ -41,4 +51,38 @@ const deleteCoupon = asyncHandler(async (req, res) => {
     throw new Error(error);
   }
 });
-module.exports = { createCoupon, getAllCoupon, updateCoupon, deleteCoupon };
+const deleteExpiredCoupons = async () => {
+  try {
+    const currentDate = new Date();
+    // Tìm và xóa các coupon có thời gian hết hạn trước thời điểm hiện tại
+    await Coupon.deleteMany({ expiry: { $lt: currentDate } });
+    console.log("Đã xóa các coupon đã hết hạn.");
+  } catch (error) {
+    console.error("Lỗi khi xóa các coupon đã hết hạn", error);
+  }
+};
+
+// Lên lịch trình chạy nhiệm vụ xóa các coupon đã hết hạn một lần mỗi ngày
+const task = cron.schedule(
+  "0 0 * * *",
+  () => {
+    deleteExpiredCoupons();
+  },
+  {
+    scheduled: true,
+    timezone: "Asia/Ho_Chi_Minh", // Chỉnh sửa múi giờ cho đúng với múi giờ của bạn
+  }
+);
+
+// Lắng nghe sự kiện khi kết thúc ứng dụng để dừng lịch trình cron
+process.on("SIGINT", () => {
+  task.stop();
+  process.exit();
+});
+module.exports = {
+  createCoupon,
+  getAllCoupon,
+  updateCoupon,
+  deleteCoupon,
+  getACoupon,
+};

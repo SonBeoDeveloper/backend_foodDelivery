@@ -13,18 +13,16 @@ const getAllCategories = asyncHandler(async (req, res) => {
 });
 
 // Get a category by ID
+
 const getCategoriesById = asyncHandler(async (req, res) => {
+  const { _id } = req.params;
   try {
-    const category = await Categories.findById(req.params.id);
-    if (!category) {
-      return res.status(404).json({ error: "Categories not found" });
-    }
-    res.json(category);
+    const getAll = await Categories.findById(_id);
+    res.json(getAll);
   } catch (error) {
     throw new Error(error);
   }
 });
-
 // Create a new category
 const createCategories = asyncHandler(async (req, res) => {
   try {

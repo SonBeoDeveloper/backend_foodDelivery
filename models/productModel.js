@@ -26,7 +26,7 @@ const productSchema = new mongoose.Schema(
       ref: "Category",
       required: [true, "Category is required"],
     },
-
+    address: { type: String },
     sold: {
       type: Number,
       default: 0,

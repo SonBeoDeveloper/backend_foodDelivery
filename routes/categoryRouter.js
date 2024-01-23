@@ -17,7 +17,7 @@ router.post(
   auth.isAdmin,
   Categories.createCategories
 );
-
+router.get("/:_id", auth.authMiddleware, Categories.getCategoriesById);
 // Update a user by ID
 router.put(
   "/:id",
